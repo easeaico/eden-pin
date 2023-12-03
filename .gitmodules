@@ -1,0 +1,3 @@
+[submodule "libs/mach-sysaudio"]
+	path = libs/mach-sysaudio
+	url = https://github.com/hexops/mach-sysaudio/
