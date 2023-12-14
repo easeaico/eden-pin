@@ -23,12 +23,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const mach_sysaudio_dep = b.dependency("mach_sysaudio", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    exe.addModule("mach-sysaudio", mach_sysaudio_dep.module("mach-sysaudio"));
-    @import("mach_sysaudio").link(mach_sysaudio_dep.builder, exe);
+    exe.linkLibC();
+    exe.linkSystemLibrary("asound");
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
