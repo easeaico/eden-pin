@@ -1,57 +1,49 @@
 const std = @import("std");
-const as = @cImport({
+const as = @import("asound.zig");
+const asc = @cImport({
     @cInclude("alsa/asoundlib.h");
 });
+const print = std.debug.print;
 
-const deviceName = "default";
-var buffer: [16 * 1024]u8 = undefined;
-
-pub fn playback() void {
-    var err: c_int = undefined;
-    var rnd = std.rand.DefaultPrng.init(0);
-
-    for (&buffer) |*item| {
-        item.* = rnd.random().int(u8) & 0xff;
-    }
-
-    var playbackHandle: ?*as.snd_pcm_t = undefined;
-    err = as.snd_pcm_open(&playbackHandle, deviceName, as.SND_PCM_STREAM_PLAYBACK, 0);
+pub fn playback(data: []const u8) !void {
+    var playbackHandle: ?*asc.snd_pcm_t = undefined;
+    var err = asc.snd_pcm_open(&playbackHandle, as.DefaultDevice, asc.SND_PCM_STREAM_PLAYBACK, 0);
     if (err < 0) {
-        std.debug.print("Playback open error: {s}\n", .{as.snd_strerror(err)});
-        std.os.exit(as.EXIT_FAILURE);
+        print("Playback open error: {s}\n", .{asc.snd_strerror(err)});
+        return as.ASoundError.PCMOpenFailed;
     }
-    std.debug.print("Playback open success\n", .{});
 
-    err = as.snd_pcm_set_params(playbackHandle, as.SND_PCM_FORMAT_U8, as.SND_PCM_ACCESS_RW_INTERLEAVED, 1, 48000, 1, 500000);
+    err = asc.snd_pcm_set_params(playbackHandle, asc.SND_PCM_FORMAT_U8, asc.SND_PCM_ACCESS_RW_INTERLEAVED, 1, 48000, 1, 500000);
     if (err < 0) {
-        std.debug.print("Playback set params error: {s}\n", .{as.snd_strerror(err)});
-        std.os.exit(as.EXIT_FAILURE);
+        print("Playback set params error: {s}\n", .{asc.snd_strerror(err)});
+        return as.ASoundError.PCMHWParamsError;
     }
 
-    var frames: as.snd_pcm_sframes_t = undefined;
-    for (0..16) |_| {
-        frames = as.snd_pcm_writei(playbackHandle, &buffer, buffer.len);
-        if (frames < 0) {
-            err = @intCast(frames);
-            err = as.snd_pcm_recover(playbackHandle, err, 0);
-            if (err < 0) {
-                std.debug.print("snd_pcm_writei failed: {s}\n", .{as.snd_strerror(err)});
-                break;
-            }
-        }
-
-        if ((frames > 0) and (frames < buffer.len)) {
-            std.debug.print("Short write (expected {}, wrote {})\n", .{ buffer.len, frames });
+    var frames: asc.snd_pcm_sframes_t = undefined;
+    frames = asc.snd_pcm_writei(playbackHandle, @ptrCast(&data), data.len);
+    if (frames < 0) {
+        err = @intCast(frames);
+        err = asc.snd_pcm_recover(playbackHandle, err, 0);
+        if (err < 0) {
+            print("snd_pcm_writei failed: {s}\n", .{asc.snd_strerror(err)});
+            return as.ASoundError.PCMPrepareError;
         }
     }
 
-    err = as.snd_pcm_drain(playbackHandle);
-    if (err < 0) {
-        std.debug.print("snd_pcm_drain failed: {s}\n", .{as.snd_strerror(err)});
+    if ((frames > 0) and (frames < data.len)) {
+        print("Short write (expected {}, wrote {})\n", .{ data.len, frames });
+        return as.ASoundError.PCMWriteError;
     }
 
-    err = as.snd_pcm_close(playbackHandle);
+    err = asc.snd_pcm_drain(playbackHandle);
     if (err < 0) {
-        std.debug.print("snd_pcm_close failed: {s}\n", .{as.snd_strerror(err)});
+        print("snd_pcm_drain failed: {s}\n", .{asc.snd_strerror(err)});
+        return as.ASoundError.PCMCloseError;
+    }
+
+    err = asc.snd_pcm_close(playbackHandle);
+    if (err < 0) {
+        print("snd_pcm_close failed: {s}\n", .{asc.snd_strerror(err)});
+        return as.ASoundError.PCMCloseError;
     }
 }

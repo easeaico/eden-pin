@@ -23,8 +23,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    exe.addIncludePath(.{ .path = "include" });
     exe.linkLibC();
     exe.linkSystemLibrary("asound");
+    exe.linkSystemLibrary("czmq");
+    exe.linkSystemLibrary("msgpackc");
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -57,7 +61,7 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .path = "src/arugula.zig" },
         .target = target,
         .optimize = optimize,
     });
