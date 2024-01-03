@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
-        .name = "eden-pen-pi",
+        .name = "eden-pin",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
         .root_source_file = .{ .path = "src/main.zig" },
@@ -24,11 +24,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.addIncludePath(.{ .path = "include" });
     exe.linkLibC();
     exe.linkSystemLibrary("asound");
-    exe.linkSystemLibrary("czmq");
-    exe.linkSystemLibrary("msgpackc");
+    exe.linkSystemLibrary("zmq");
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -61,10 +59,13 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/arugula.zig" },
+        .root_source_file = .{ .path = "src/asound.zig" },
         .target = target,
         .optimize = optimize,
     });
+    unit_tests.linkLibC();
+    unit_tests.linkSystemLibrary("asound");
+    unit_tests.linkSystemLibrary("zmq");
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

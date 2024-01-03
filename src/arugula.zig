@@ -1,135 +1,185 @@
 const c = @cImport({
-    @cInclude("czmq.h");
-    @cInclude("msgpack.h");
+    @cInclude("zmq.h");
+    @cInclude("stdio.h");
 });
 const std = @import("std");
+const mpack = @import("mpack.zig");
+const asound = @import("asound.zig");
 const net = std.net;
 const mem = std.mem;
 const io = std.io;
 const fmt = std.fmt;
 const log = std.log;
 const http = std.http;
+const time = std.time;
 
 pub const ArugulaError = error{
     UnpackError,
+    PackError,
+    ConnectError,
     SendFrameError,
+    RecvFrameError,
 };
 
 pub const ChatCommand = struct {
     const Self = @This();
 
-    sbuf: c.msgpack_sbuffer,
+    buf: std.ArrayList(u8),
+    allocator: mem.Allocator,
 
-    pub fn init(user_id: i64, character_id: i64, ts: i64, audio: []const u8) !Self {
-        var self = Self{};
-        c.msgpack_sbuffer_init(&self.sbuf);
+    pub fn init(allocator: mem.Allocator, user_id: i64, character_id: i64, audio: []u8) !Self {
+        var buf = std.ArrayList(u8).init(allocator);
+        var w = mpack.msgPackWriter(buf.writer(), .{});
 
-        var pk: c.msgpack_packer = undefined;
-        c.msgpack_packer_init(&pk, &self.sbuf, c.msgpack_sbuffer_write);
-        c.msgpack_pack_int64(&pk, user_id);
-        c.msgpack_pack_int64(&pk, character_id);
-        c.msgpack_pack_int64(&pk, ts);
-        c.msgpack_pack_bin_with_body(&pk, audio, audio.len);
+        try w.beginArray(2);
+        try w.writeString("CHAT");
+        try w.beginMap(4);
+        try w.writeString("user_id");
+        try w.writeInt(user_id);
+        try w.writeString("character_id");
+        try w.writeInt(character_id);
+        try w.writeString("timestamp");
+        try w.writeTimestamp(time.timestamp(), 0);
+        try w.writeString("audio");
+        try w.writeBytes(audio);
 
-        return self;
+        return .{
+            .buf = buf,
+            .allocator = allocator,
+        };
     }
 
     pub fn deinit(self: Self) void {
-        c.msgpack_sbuffer_destroy(&self.sbuf);
+        self.buf.deinit();
     }
 };
 
 pub const ChatResponse = struct {
     const Self = @This();
 
-    result: c.msgpack_unpacked,
     text: []const u8,
     audio: []const u8,
 
-    pub fn init(sbuf: []const u8) !Self {
-        var self = Self{};
-        var off: usize = 0;
+    allocator: mem.Allocator,
+    arena: std.heap.ArenaAllocator,
 
-        c.msgpack_unpacked_init(&self.result);
+    pub fn init(a: mem.Allocator, sbuf: []u8) !Self {
+        log.info("buf size {d}", .{sbuf.len});
 
-        var ret = c.msgpack_unpack_next(&self.result, sbuf, sbuf.len, &off);
-        if (ret != c.MSGPACK_UNPACK_SUCCESS) {
-            log.err("unpack error {}", .{ret});
-            return ArugulaError.UnpackError;
-        }
-        self.text = self.result.data.via.str;
+        var arena = std.heap.ArenaAllocator.init(a);
+        var allocator = arena.allocator();
 
-        ret = c.msgpack_unpack_next(&self.result, sbuf, sbuf.len, &off);
-        if (ret != c.MSGPACK_UNPACK_SUCCESS) {
-            log.err("unpack error {}", .{ret});
-            return ArugulaError.UnpackError;
-        }
-        self.audio = self.result.data.via.bin;
+        var fbs = io.fixedBufferStream(sbuf);
+        var r = mpack.msgPackReader(fbs.reader());
+        var v = try r.readValue(allocator);
+        var m = v.root.Map;
+        var text: mpack.Value = m.get("text") orelse return ArugulaError.UnpackError;
+        var audio: mpack.Value = m.get("audio") orelse return ArugulaError.UnpackError;
+
+        return .{
+            .text = text.String,
+            .audio = audio.Binary,
+            .arena = arena,
+            .allocator = allocator,
+        };
     }
 
-    fn deinit(self: Self) void {
-        c.msgpack_unpacked_destroy(&self.result);
+    pub fn deinit(self: Self) void {
+        self.arena.deinit();
     }
 };
 
 pub const Client = struct {
     const Self = @This();
 
-    var zsock: c.zsock_t = undefined;
+    context: ?*anyopaque,
+    requester: ?*anyopaque,
 
-    var stream: net.Stream = undefined;
+    allocator: mem.Allocator,
 
-    pub fn init(endpoint: []const u8) Self {
-        zsock = try c.zsock_new_dealer(endpoint);
-        return .{};
+    pub fn init(allocator: mem.Allocator, endpoint: [:0]const u8) !Self {
+        const context = c.zmq_ctx_new();
+        const requester = c.zmq_socket(context, c.ZMQ_REQ);
+        const ret = c.zmq_connect(requester, endpoint.ptr);
+        if (ret < 0) {
+            log.err("zmq connect error", .{});
+        }
+
+        return .{
+            .context = context,
+            .requester = requester,
+            .allocator = allocator,
+        };
     }
 
-    pub fn send(_: Self, command: ChatCommand) !void {
-        var data = command.sbuf.data;
-        var size = command.sbuf.size;
-        var frame: *c.zframe_t = try c.zframe_new(data, size);
-        var rc: c_int = c.zframe_send(&frame, zsock, 0);
-        if (rc < 0) {
+    pub fn send(self: Self, command: *const ChatCommand) !void {
+        var ret = c.zmq_send(self.requester, command.buf.items.ptr, command.buf.items.len, 0);
+        if (ret < 0) {
+            log.err("frame send error", .{});
             return ArugulaError.SendFrameError;
         }
     }
 
-    pub fn recv(_: Self) ![]ChatResponse {
-        var resps: std.ArrayList(ChatResponse) = undefined;
+    pub fn recv(self: Self) !ChatResponse {
+        var msg: c.zmq_msg_t = undefined;
 
-        var more = 0;
-        while (more >= 0) {
-            var frame = try c.zframe_recv(&zsock);
-            var dataSize = c.zframe_size(frame);
-            var dataPtr = c.zframe_data(frame);
-            var sbuf: [dataSize]u8 = undefined;
-            mem.copy(u8, sbuf, dataPtr);
-            resps.append(ChatResponse.init(sbuf));
-
-            more = c.zframe_more(frame);
-            c.zframe_destroy(&frame);
+        var rc: c_int = c.zmq_msg_init(&msg);
+        if (rc != 0) {
+            log.err("zmq msg init error", .{});
+            return ArugulaError.RecvFrameError;
         }
+        defer {
+            _ = c.zmq_msg_close(&msg);
+        }
+
+        rc = c.zmq_msg_recv(&msg, self.requester, 0);
+        if (rc < 0) {
+            log.err("zmq msg recv error", .{});
+            return ArugulaError.RecvFrameError;
+        }
+        log.info("data reads {}", .{rc});
+        var ptr = c.zmq_msg_data(&msg);
+        if (ptr) |p| {
+            var data_ptr = @as([*]u8, @ptrCast(p));
+            var size = c.zmq_msg_size(&msg);
+            return try ChatResponse.init(self.allocator, data_ptr[0..size]);
+        }
+
+        return ArugulaError.UnpackError;
     }
 
     pub fn deinit(self: Self) void {
-        c.zsock_destroy(self.zsock);
+        var ret = c.zmq_close(self.requester);
+        if (ret < 0) {
+            log.err("close zmq sock error", .{});
+        }
+
+        ret = c.zmq_ctx_destroy(self.context);
+        if (ret < 0) {
+            log.err("destroy zmq context error", .{});
+        }
     }
 };
 
 test "basic coverage (exec)" {
     const allocator = std.testing.allocator;
 
-    const client = Client.init("tcp://127.0.0.1:8055");
+    const client = try Client.init(allocator, "tcp://127.0.0.1:8055");
     defer client.deinit();
 
-    var data = try std.fs.cwd().readFileAlloc(allocator, "out.wav", 4096);
+    const data = try std.fs.cwd().readFileAlloc(allocator, "out.wav", 1024 * 1024);
     defer allocator.free(data);
 
-    const cmd = try ChatCommand.init(1, 1, std.time.timestamp(), data);
+    const cmd = try ChatCommand.init(allocator, 1, 1, data);
     defer cmd.deinit();
 
-    try client.send(cmd);
-    for (try client.recv()) |r| {
-        std.testing.expect(r.text != null);
-    }
+    try client.send(&cmd);
+
+    var resp = try client.recv();
+    defer resp.deinit();
+
+    log.err("resp: {}", .{resp});
+    var player: asound.Player = undefined;
+    try player.playback(resp.audio);
+    try std.testing.expect(resp.text.len > 0);
 }

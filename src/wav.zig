@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log;
 
 pub const Format = enum {
     unsigned8,
@@ -31,7 +32,7 @@ pub const PreloadedInfo = struct {
 // exist on some targets (e.g. wasm)
 pub fn Loader(comptime Reader: type, comptime verbose: bool) type {
     return struct {
-        fn readIdentifier(reader: *Reader) ![4]u8 {
+        fn readIdentifier(reader: Reader) ![4]u8 {
             var quad: [4]u8 = undefined;
             try reader.readNoEof(&quad);
             return quad;
@@ -39,12 +40,12 @@ pub fn Loader(comptime Reader: type, comptime verbose: bool) type {
 
         fn preloadError(comptime message: []const u8) !PreloadedInfo {
             if (verbose) {
-                std.debug.warn("{}\n", .{message});
+                log.warn("{s}\n", .{message});
             }
             return error.WavLoadFailed;
         }
 
-        pub fn preload(reader: *Reader) !PreloadedInfo {
+        pub fn preload(reader: Reader) !PreloadedInfo {
             // read RIFF chunk descriptor (12 bytes)
             const chunk_id = try readIdentifier(reader);
             if (!std.mem.eql(u8, &chunk_id, "RIFF")) {
@@ -214,14 +215,15 @@ test "basic coverage (loading)" {
         0x00, 0x00, 0x00, 0xFF, 0xFF, 0x03, 0x00, 0xFC, 0xFF, 0x03, 0x00,
     };
 
-    var reader = std.io.fixedBufferStream(&null_wav).reader();
+    var fbs = std.io.fixedBufferStream(&null_wav);
+    var reader = fbs.reader();
     const MyLoader = Loader(@TypeOf(reader), true);
     const preloaded = try MyLoader.preload(&reader);
 
-    std.testing.expectEqual(@as(usize, 1), preloaded.num_channels);
-    std.testing.expectEqual(@as(usize, 44100), preloaded.sample_rate);
-    std.testing.expectEqual(@as(Format, .signed16_lsb), preloaded.format);
-    std.testing.expectEqual(@as(usize, 44), preloaded.num_samples);
+    try std.testing.expectEqual(@as(usize, 1), preloaded.num_channels);
+    try std.testing.expectEqual(@as(usize, 44100), preloaded.sample_rate);
+    try std.testing.expectEqual(@as(Format, .signed16_lsb), preloaded.format);
+    try std.testing.expectEqual(@as(usize, 44), preloaded.num_samples);
 
     var buffer: [88]u8 = undefined;
     try MyLoader.load(&reader, preloaded, &buffer);
@@ -229,14 +231,15 @@ test "basic coverage (loading)" {
 
 test "basic coverage (saving)" {
     var buffer: [1000]u8 = undefined;
-    var writer = std.io.fixedBufferStream(&buffer).writer();
+    var fbs = std.io.fixedBufferStream(&buffer);
+    var writer = fbs.writer();
     try Saver(@TypeOf(writer)).save(writer, &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 }, .{
         .num_channels = 1,
         .sample_rate = 44100,
         .format = .signed16_lsb,
     });
 
-    std.testing.expectEqualSlices(u8, "RIFF", buffer[0..4]);
+    try std.testing.expectEqualSlices(u8, "RIFF", buffer[0..4]);
 }
 
 test "basic coverage (streaming out)" {
@@ -250,16 +253,16 @@ test "basic coverage (streaming out)" {
         .sample_rate = 44100,
         .format = .signed16_lsb,
     });
-    std.testing.expectEqual(@as(u64, 44), try fbs.getPos());
-    std.testing.expectEqual(@as(u32, 0), std.mem.readIntLittle(u32, buffer[4..8]));
-    std.testing.expectEqual(@as(u32, 0), std.mem.readIntLittle(u32, buffer[40..44]));
+    try std.testing.expectEqual(@as(u64, 44), try fbs.getPos());
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readIntLittle(u32, buffer[4..8]));
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readIntLittle(u32, buffer[40..44]));
 
     const data = &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
 
     try fbs.writer().writeAll(data);
-    std.testing.expectEqual(@as(u64, 52), try fbs.getPos());
+    try std.testing.expectEqual(@as(u64, 52), try fbs.getPos());
 
     try MySaver.patchHeader(fbs.writer(), fbs.seekableStream(), data.len);
-    std.testing.expectEqual(@as(u32, 44), std.mem.readIntLittle(u32, buffer[4..8]));
-    std.testing.expectEqual(@as(u32, 8), std.mem.readIntLittle(u32, buffer[40..44]));
+    try std.testing.expectEqual(@as(u32, 44), std.mem.readIntLittle(u32, buffer[4..8]));
+    try std.testing.expectEqual(@as(u32, 8), std.mem.readIntLittle(u32, buffer[40..44]));
 }

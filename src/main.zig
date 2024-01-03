@@ -1,35 +1,60 @@
 const std = @import("std");
 const arugula = @import("arugula.zig");
-const playback = @import("playback.zig");
-const capture = @import("capture.zig");
+const asound = @import("asound.zig");
 
 const io = std.io;
 const net = std.net;
 const fmt = std.fmt;
+const log = std.log;
+const mem = std.mem;
+const Thread = std.Thread;
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
 
-    const allocator = arena.allocator();
-    _ = allocator;
-    const client = arugula.Client.init("127.0.0.1:8055");
+    const client = try arugula.Client.init(allocator, "tcp://127.0.0.1:8055");
+    defer client.deinit();
 
-    const act = std.os.Sigaction{
-        .handler = .{ .handler = capture.signalHandler },
-        .mask = std.os.empty_sigset,
-        .flags = 0,
-    };
-    try std.os.sigaction(std.os.SIG.INT, &act, null);
+    while (true) {
+        try captureAndPlay(allocator, client);
+    }
+}
 
-    var buf: [4096]u8 = undefined;
-    var len = try capture.capture(&buf);
+fn captureAndPlay(allocator: mem.Allocator, client: arugula.Client) !void {
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
 
-    const cmd = try arugula.ChatCommand.init(1, 1, std.time.timestamp(), buf[0..len]);
-    defer cmd.deinit();
+    try stdout.print("enter to start recording", .{});
+    var c = try stdin.readByte();
+    if (c != '\n') {
+        return;
+    }
 
-    try client.send(cmd);
-    for (try client.recv()) |r| {
-        try playback.playback(r.audio);
+    var capturer = asound.Capturer.init(allocator);
+    defer capturer.deinit();
+
+    try capturer.spwanCapture();
+
+    try stdout.print("enter to stop recording", .{});
+    while (true) {
+        c = try stdin.readByte();
+        if (c != '\n') {
+            continue;
+        }
+
+        var captured = capturer.stopCapture();
+        log.info("data captured: {d}", .{captured.len});
+        const cmd = try arugula.ChatCommand.init(allocator, 1, 1, captured);
+        defer cmd.deinit();
+
+        try client.send(&cmd);
+        log.info("data sent!", .{});
+
+        var resp = try client.recv();
+        log.info("data recv: {s}", .{resp.text});
+        try asound.play(resp.audio);
+        log.info("data played", .{});
+        return;
     }
 }
