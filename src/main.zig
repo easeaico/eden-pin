@@ -13,7 +13,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const client = try arugula.Client.init(allocator, "tcp://127.0.0.1:8055");
+    const client = try arugula.Client.init(allocator, "tcp://192.168.88.13:8055");
     defer client.deinit();
 
     while (true) {
