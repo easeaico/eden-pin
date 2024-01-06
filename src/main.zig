@@ -28,9 +28,6 @@ pub fn main() !void {
     var player = asound.Player.init();
     defer player.deinit();
 
-    try player.open();
-    defer player.close();
-
     var capturer = asound.Capturer.init(allocator);
     defer capturer.deinit();
 
