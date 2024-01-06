@@ -6,7 +6,6 @@ const wav = @import("wav.zig");
 
 const log = std.log;
 const io = std.io;
-const fs = std.fs;
 const mem = std.mem;
 const atomic = std.atomic;
 const Thread = std.Thread;
@@ -15,6 +14,7 @@ pub const ASoundError = error{
     PCMOpenFailed,
     PCMHWParamsError,
     PCMPrepareError,
+    PCMRecoverError,
     PCMReadError,
     PCMWriteError,
     PCMCloseError,
@@ -32,6 +32,7 @@ pub const Capturer = struct {
     capturing: bool,
     captured: []u8,
     arena: std.heap.ArenaAllocator,
+    handle: ?*c.snd_pcm_t,
 
     pub fn init(allocator: mem.Allocator) Self {
         const arena = std.heap.ArenaAllocator.init(allocator);
@@ -40,11 +41,33 @@ pub const Capturer = struct {
             .capturing = false,
             .captured = undefined,
             .arena = arena,
+            .handle = undefined,
         };
     }
 
     pub fn deinit(self: Self) void {
         self.arena.deinit();
+    }
+
+    pub fn open(self: *Self) !void {
+        var err = c.snd_pcm_open(&self.handle, DefaultDevice, c.SND_PCM_STREAM_CAPTURE, 0);
+        if (err < 0) {
+            log.err("Capture open error: {s}\n", .{c.snd_strerror(err)});
+            return ASoundError.PCMOpenFailed;
+        }
+
+        err = self.setHWPramas(self.handle);
+        if (err < 0) {
+            log.err("cannot set parameters ({s})\n", .{c.snd_strerror(err)});
+            return ASoundError.PCMHWParamsError;
+        }
+    }
+
+    pub fn close(self: *Self) void {
+        var err = c.snd_pcm_close(self.handle);
+        if (err < 0) {
+            log.err("snd pcm close failed ({s})\n", .{c.snd_strerror(err)});
+        }
     }
 
     fn setHWPramas(_: Self, handle: ?*c.snd_pcm_t) c_int {
@@ -91,20 +114,7 @@ pub const Capturer = struct {
     fn captureFrames(self: *Self) !std.ArrayList([]u8) {
         @atomicStore(bool, &self.capturing, true, .SeqCst);
 
-        var handle: ?*c.snd_pcm_t = undefined;
-        var err = c.snd_pcm_open(&handle, DefaultDevice, c.SND_PCM_STREAM_CAPTURE, 0);
-        if (err < 0) {
-            log.err("Capture open error: {s}\n", .{c.snd_strerror(err)});
-            return ASoundError.PCMOpenFailed;
-        }
-
-        err = self.setHWPramas(handle);
-        if (err < 0) {
-            log.err("cannot set parameters ({s})\n", .{c.snd_strerror(err)});
-            return ASoundError.PCMHWParamsError;
-        }
-
-        err = c.snd_pcm_prepare(handle);
+        var err = c.snd_pcm_prepare(self.handle);
         if (err < 0) {
             log.err("cannot prepare audio interface for use ({s})\n", .{c.snd_strerror(err)});
             return ASoundError.PCMPrepareError;
@@ -118,7 +128,7 @@ pub const Capturer = struct {
             var frame_buffer = try self.arena.allocator().alloc(u8, frame_size);
 
             var buffer_frames: c.snd_pcm_uframes_t = frame_pre_read;
-            var frame_reads = c.snd_pcm_readi(handle, frame_buffer.ptr, buffer_frames);
+            var frame_reads = c.snd_pcm_readi(self.handle, frame_buffer.ptr, buffer_frames);
             if (frame_reads < 0) {
                 log.err("read from audio interface failed ({s})\n", .{c.snd_strerror(@as(c_int, @intCast(frame_reads)))});
                 return ASoundError.PCMReadError;
@@ -131,12 +141,6 @@ pub const Capturer = struct {
 
             try frame_buffers.append(frame_buffer);
             //log.err("data reads {d}\n", .{frame_buffer.len});
-        }
-
-        err = c.snd_pcm_close(handle);
-        if (err < 0) {
-            log.err("snd pcm close failed ({s})\n", .{c.snd_strerror(err)});
-            return ASoundError.PCMCloseError;
         }
 
         return frame_buffers;
@@ -161,7 +165,7 @@ pub const Capturer = struct {
         self.captured = wave.items;
     }
 
-    pub fn spwanCapture(self: *Self) !void {
+    pub fn spawnCapture(self: *Self) !void {
         self.capture_thread = try Thread.spawn(.{}, Capturer.captureWave, .{self});
     }
 
@@ -172,46 +176,81 @@ pub const Capturer = struct {
     }
 };
 
-pub fn play(data: []const u8) !void {
-    var handle: ?*c.snd_pcm_t = undefined;
-    var err = c.snd_pcm_open(&handle, DefaultDevice, c.SND_PCM_STREAM_PLAYBACK, 0);
-    if (err < 0) {
-        log.err("Playback open error: {s}\n", .{c.snd_strerror(err)});
-        return ASoundError.PCMOpenFailed;
-    }
-    err = c.snd_pcm_set_params(handle, c.SND_PCM_FORMAT_S16_LE, c.SND_PCM_ACCESS_RW_INTERLEAVED, 1, 44100, 1, 500000);
-    if (err < 0) {
-        log.err("Playback set params error: {s}\n", .{c.snd_strerror(err)});
-        return ASoundError.PCMHWParamsError;
+pub const Player = struct {
+    const Self = @This();
+
+    handle: ?*c.snd_pcm_t,
+    play_thread: Thread,
+
+    pub fn init() Self {
+        return .{
+            .handle = undefined,
+            .play_thread = undefined,
+        };
     }
 
-    var frames = c.snd_pcm_writei(handle, data.ptr, data.len);
-    if (frames < 0) {
-        err = @as(c_int, @intCast(frames));
-        err = c.snd_pcm_recover(handle, err, 0);
+    pub fn deinit(_: Self) void {}
+
+    pub fn open(self: *Self) !void {
+        var err = c.snd_pcm_open(&self.handle, DefaultDevice, c.SND_PCM_STREAM_PLAYBACK, 0);
         if (err < 0) {
-            log.err("snd_pcm_writei failed: {s}\n", .{c.snd_strerror(err)});
-            return ASoundError.PCMPrepareError;
+            log.err("Playback open error: {s}\n", .{c.snd_strerror(err)});
+            return ASoundError.PCMOpenFailed;
+        }
+        err = c.snd_pcm_set_params(self.handle, c.SND_PCM_FORMAT_S16_LE, c.SND_PCM_ACCESS_RW_INTERLEAVED, 1, 44100, 1, 500000);
+        if (err < 0) {
+            log.err("Playback set params error: {s}\n", .{c.snd_strerror(err)});
+            return ASoundError.PCMHWParamsError;
         }
     }
 
-    if ((frames > 0) and (frames < data.len)) {
-        log.err("Short write (expected {d}, wrote {d})\n", .{ data.len, frames });
-        return ASoundError.PCMWriteError;
+    pub fn spawnPlay(self: *Self, data: [][]const u8) !void {
+        self.play_thread = try Thread.spawn(.{}, Player.playWave, .{ self, data });
     }
 
-    var ret = c.snd_pcm_drain(handle);
-    if (ret < 0) {
-        log.err("snd_pcm_drain failed: {s}\n", .{c.snd_strerror(ret)});
-        return ASoundError.PCMCloseError;
+    pub fn playWave(self: *Self, data: [][]const u8) !void {
+        try self.open();
+        defer self.close();
+
+        for (data) |d| {
+            var fbs = io.fixedBufferStream(d);
+            _ = try wav.Loader(@TypeOf(fbs).Reader, true).preload(fbs.reader());
+
+            var fs: c.snd_pcm_uframes_t = (d.len - fbs.pos) / 2;
+            var frames = c.snd_pcm_writei(self.handle, d.ptr + fbs.pos, fs);
+            if (frames < 0) {
+                var err = @as(c_int, @intCast(frames));
+                err = c.snd_pcm_recover(self.handle, err, 0);
+                if (err < 0) {
+                    log.err("snd_pcm_writei failed: {s}\n", .{c.snd_strerror(err)});
+                    return ASoundError.PCMRecoverError;
+                }
+            }
+
+            if ((frames > 0) and (frames < fs)) {
+                log.err("Short write (expected {d}, wrote {d})\n", .{ fs, frames });
+                return ASoundError.PCMWriteError;
+            }
+
+            var ret = c.snd_pcm_drain(self.handle);
+            if (ret < 0) {
+                log.err("snd_pcm_drain failed: {s}\n", .{c.snd_strerror(ret)});
+                return ASoundError.PCMCloseError;
+            }
+        }
     }
 
-    ret = c.snd_pcm_close(handle);
-    if (ret < 0) {
-        log.err("snd_pcm_close failed: {s}\n", .{c.snd_strerror(ret)});
-        return ASoundError.PCMCloseError;
+    pub fn join(self: Self) void {
+        return self.play_thread.join();
     }
-}
+
+    pub fn close(self: Self) void {
+        var ret = c.snd_pcm_close(self.handle);
+        if (ret < 0) {
+            log.err("snd_pcm_close failed: {s}\n", .{c.snd_strerror(ret)});
+        }
+    }
+};
 
 test "sound capture" {
     const allocator = std.testing.allocator;
@@ -232,5 +271,11 @@ test "sound play" {
     const file = try std.fs.cwd().openFile("out.wav", .{});
     var data: []u8 = undefined;
     _ = try file.readAll(data);
-    try play(data);
+
+    var player = Player.init();
+
+    try player.open();
+    defer player.close();
+
+    try player.play(data);
 }

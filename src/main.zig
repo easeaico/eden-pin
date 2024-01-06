@@ -1,6 +1,7 @@
 const std = @import("std");
 const arugula = @import("arugula.zig");
 const asound = @import("asound.zig");
+const gpio = @import("gpio.zig");
 
 const io = std.io;
 const net = std.net;
@@ -9,19 +10,41 @@ const log = std.log;
 const mem = std.mem;
 const Thread = std.Thread;
 
+const led_pin = 16;
+const btn_pin = 17;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const client = try arugula.Client.init(allocator, "tcp://192.168.88.13:8055");
+    const client = arugula.Client.init(allocator);
     defer client.deinit();
 
+    try client.connect("tcp://192.168.88.13:8055"); //"tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055");
+
+    //gpio.setMode(btn_pin, gpio.Mode.Input);
+    //gpio.setPull(btn_pin, gpio.PullMode.PullUp);
+
+    var player = asound.Player.init();
+    defer player.deinit();
+
+    try player.open();
+    defer player.close();
+
+    var capturer = asound.Capturer.init(allocator);
+    defer capturer.deinit();
+
+    try capturer.open();
+    defer capturer.close();
+
     while (true) {
-        try captureAndPlay(allocator, client);
+        captureToPlay(allocator, client, &capturer, &player) catch |err| {
+            log.err("capture to play error: {any}", .{err});
+        };
     }
 }
 
-fn captureAndPlay(allocator: mem.Allocator, client: arugula.Client) !void {
+fn captureToPlay(allocator: mem.Allocator, client: arugula.Client, capturer: *asound.Capturer, player: *asound.Player) !void {
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
 
@@ -31,10 +54,7 @@ fn captureAndPlay(allocator: mem.Allocator, client: arugula.Client) !void {
         return;
     }
 
-    var capturer = asound.Capturer.init(allocator);
-    defer capturer.deinit();
-
-    try capturer.spwanCapture();
+    try capturer.spawnCapture();
 
     try stdout.print("enter to stop recording", .{});
     while (true) {
@@ -45,6 +65,7 @@ fn captureAndPlay(allocator: mem.Allocator, client: arugula.Client) !void {
 
         var captured = capturer.stopCapture();
         log.info("data captured: {d}", .{captured.len});
+
         const cmd = try arugula.ChatCommand.init(allocator, 1, 1, captured);
         defer cmd.deinit();
 
@@ -52,8 +73,16 @@ fn captureAndPlay(allocator: mem.Allocator, client: arugula.Client) !void {
         log.info("data sent!", .{});
 
         var resp = try client.recv();
-        log.info("data recv: {s}", .{resp.text});
-        try asound.play(resp.audio);
+        defer resp.deinit();
+
+        var results = resp.data.items;
+        var datas = try allocator.alloc([]const u8, results.len);
+        for (results, 0..) |r, i| {
+            datas[i] = r.audio;
+        }
+        try player.spawnPlay(datas);
+        player.join();
+
         log.info("data played", .{});
         return;
     }
