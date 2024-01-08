@@ -6,13 +6,15 @@ pub const GpioRegisterMemory: type = []align(1) volatile GpioRegister;
 /// an interface that gives us a mapping of the physical memory of the
 /// peripherals
 pub const GpioMemMapper = struct {
+    ptr: *anyopaque,
+
     /// pointer to the actual function that provides a mapping of the memory
-    map_fn: fn (*GpioMemMapper) anyerror!GpioRegisterMemory,
+    map_fn: *const fn (ptr: *anyopaque) anyerror!GpioRegisterMemory,
 
     /// the convenience function with which to use the interface
     /// provides access to a mapping of the GPIO registers
-    pub fn memoryMap(interface: *GpioMemMapper) !GpioRegisterMemory {
-        return interface.map_fn(interface);
+    pub fn memoryMap(self: GpioMemMapper) !GpioRegisterMemory {
+        return self.map_fn(self.ptr);
     }
 };
 
@@ -48,16 +50,21 @@ pub const BoardInfo = struct {
 pub const Bcm2385GpioMemoryMapper = struct {
     const Self: type = @This();
 
-    /// the GpioMemMapper interface
-    memory_mapper: GpioMemMapper,
     /// the raw bytes representing the memory mapping
     devgpiomem: []align(std.mem.page_size) u8,
 
     pub fn init() !Self {
-        const devgpiomem = try std.fs.openFileAbsolute("/dev/gpiomem", std.fs.File.OpenFlags{ .read = true, .write = true });
+        var devgpiomem = try std.fs.openFileAbsolute("/dev/gpiomem", std.fs.File.OpenFlags{ .mode = .read_write });
         defer devgpiomem.close();
 
-        return Self{ .devgpiomem = try std.os.mmap(null, BoardInfo.gpio_registers.len, std.os.PROT.READ | std.os.PROT.WRITE, std.os.MAP.SHARED, devgpiomem.handle, 0), .memory_mapper = .{ .map_fn = Self.memoryMap } };
+        return Self{ .devgpiomem = try std.os.mmap(null, BoardInfo.gpio_registers.len, std.os.PROT.READ | std.os.PROT.WRITE, std.os.MAP.SHARED, devgpiomem.handle, 0) };
+    }
+
+    pub fn mapper(self: *Self) GpioMemMapper {
+        return .{
+            .ptr = self,
+            .map_fn = memoryMap,
+        };
     }
 
     /// unmap the mapped memory
@@ -65,8 +72,8 @@ pub const Bcm2385GpioMemoryMapper = struct {
         std.os.munmap(self.devgpiomem);
     }
 
-    pub fn memoryMap(interface: *GpioMemMapper) !GpioRegisterMemory {
-        var self = @fieldParentPtr(Self, "memory_mapper", interface);
+    pub fn memoryMap(ptr: *anyopaque) !GpioRegisterMemory {
+        const self: *Self = @ptrCast(@alignCast(ptr));
         return std.mem.bytesAsSlice(u32, self.devgpiomem);
     }
 };
@@ -111,113 +118,118 @@ pub const Error = error{
     IllegalMode,
 };
 
-/// if initialized points to the memory block that is provided by the gpio
-/// memory mapping interface
-var g_gpio_registers: ?GpioRegisterMemory = null;
+pub const GpioRegisterOperation = struct {
+    const Self = @This();
 
-var is_init: bool = false;
+    /// if initialized points to the memory block that is provided by the gpio
+    /// memory mapping interface
+    gpio_registers: ?GpioRegisterMemory,
+    is_init: bool = false,
 
-/// initialize the GPIO control with the given memory mapping
-pub fn init(memory_interface: *GpioMemMapper) !void {
-    g_gpio_registers = try memory_interface.memoryMap();
-}
-
-/// deinitialize
-/// This function will not release access of the GPIO memory, instead
-/// it will perform some cleanup for the internals of this implementation
-pub fn deinit() void {
-    g_gpio_registers = null;
-}
-
-// write the given level to the pin
-pub fn setLevel(pin_number: u8, level: Level) !void {
-    try checkPinNumber(pin_number, BoardInfo);
-
-    // register offset to find the correct set or clear register depending on the level:
-    // setting works by writing a 1 to the bit that corresponds to the pin in the appropriate GPSET{n} register
-    // and clearing works by writing a 1 to the bit that corresponds to the pin in the appropriate GPCLR{n} register
-    // writing a 0 to those registers doesn't do anything
-    const register_zero: u8 = switch (level) {
-        .High => comptime gpioRegisterZeroIndex("gpset_registers", BoardInfo), // "set" GPSET{n} registers
-        .Low => comptime gpioRegisterZeroIndex("gpclr_registers", BoardInfo), // "clear" GPCLR{n} registers
-    };
-
-    try setPinSingleBit(g_gpio_registers, .{ .pin_number = pin_number, .register_zero = register_zero }, 1);
-}
-
-pub fn getLevel(pin_number: u8) !Level {
-    const gplev_register_zero = comptime gpioRegisterZeroIndex("gplev_registers", BoardInfo);
-
-    const bit: u1 = try getPinSingleBit(g_gpio_registers, .{ .register_zero = gplev_register_zero, .pin_number = pin_number });
-    if (bit == 0) {
-        return .Low;
-    } else {
-        return .High;
+    /// initialize the GPIO control with the given memory mapping
+    pub fn init(memory_interface: *GpioMemMapper) !Self {
+        return .{
+            .gpio_registers = try memory_interface.memoryMap(),
+        };
     }
-}
-// set the mode for the given pin.
-pub fn setMode(pin_number: u8, mode: Mode) Error!void {
-    var registers = g_gpio_registers orelse return Error.Uninitialized;
-    try checkPinNumber(pin_number, BoardInfo);
 
-    // a series of @bitSizeOf(Mode) is necessary to encapsulate the function of one pin
-    // this is why we have to calculate the amount of pins that fit into a register by dividing
-    // the number of bits in the register by the number of bits for the function
-    // as of now 3 bits for the function and 32 bits for the register make 10 pins per register
-    const pins_per_register = comptime @divTrunc(@bitSizeOf(GpioRegister), @bitSizeOf(Mode));
+    /// deinitialize
+    /// This function will not release access of the GPIO memory, instead
+    /// it will perform some cleanup for the internals of this implementation
+    pub fn deinit(self: *Self) void {
+        self.gpio_registers = null;
+    }
 
-    const gpfsel_register_zero = comptime gpioRegisterZeroIndex("gpfsel_registers", BoardInfo);
-    const n: @TypeOf(pin_number) = @divTrunc(pin_number, pins_per_register);
+    // write the given level to the pin
+    pub fn setLevel(self: Self, pin_number: u8, level: Level) !void {
+        try checkPinNumber(pin_number, BoardInfo);
 
-    // set the bits of the corresponding pins to zero so that we can bitwise or the correct mask to it below
-    registers[gpfsel_register_zero + n] &= clearMask(pin_number); // use bitwise-& here
-    registers[gpfsel_register_zero + n] |= modeMask(pin_number, mode); // use bitwise-| here TODO, this is dumb, rework the mode setting mask to not have the inverse!
-}
+        // register offset to find the correct set or clear register depending on the level:
+        // setting works by writing a 1 to the bit that corresponds to the pin in the appropriate GPSET{n} register
+        // and clearing works by writing a 1 to the bit that corresponds to the pin in the appropriate GPCLR{n} register
+        // writing a 0 to those registers doesn't do anything
+        const register_zero: u8 = switch (level) {
+            .High => comptime gpioRegisterZeroIndex("gpset_registers", BoardInfo), // "set" GPSET{n} registers
+            .Low => comptime gpioRegisterZeroIndex("gpclr_registers", BoardInfo), // "clear" GPCLR{n} registers
+        };
 
-// read the mode of the given pin number
-pub fn getMode(pin_number: u8) !Mode {
-    var registers = g_gpio_registers orelse return Error.Uninitialized;
-    try checkPinNumber(pin_number, BoardInfo);
+        try setPinSingleBit(self.gpio_registers, .{ .pin_number = pin_number, .register_zero = register_zero }, 1);
+    }
 
-    const pins_per_register = comptime @divTrunc(@bitSizeOf(GpioRegister), @bitSizeOf(Mode));
-    const gpfsel_register_zero = comptime gpioRegisterZeroIndex("gpfsel_registers", BoardInfo);
-    const n: @TypeOf(pin_number) = @divTrunc(pin_number, pins_per_register);
+    pub fn getLevel(self: Self, pin_number: u8) !Level {
+        const gplev_register_zero = comptime gpioRegisterZeroIndex("gplev_registers", BoardInfo);
 
-    const ModeIntType = (@typeInfo(Mode).Enum.tag_type);
-
-    const ones: GpioRegister = std.math.maxInt(ModeIntType);
-    const shift_count = @bitSizeOf(Mode) * @as(u5, @intCast(pin_number % pins_per_register));
-    const stencil_mask = ones << shift_count;
-    const mode_value = @as(ModeIntType, @intCast((registers[gpfsel_register_zero + n] & stencil_mask) >> shift_count));
-
-    inline for (std.meta.fields(Mode)) |mode| {
-        if (mode.value == mode_value) {
-            return @as(Mode, @enumFromInt(mode.value));
+        const bit: u1 = try getPinSingleBit(self.gpio_registers, .{ .register_zero = gplev_register_zero, .pin_number = pin_number });
+        if (bit == 0) {
+            return .Low;
+        } else {
+            return .High;
         }
     }
+    // set the mode for the given pin.
+    pub fn setMode(self: Self, pin_number: u8, mode: Mode) Error!void {
+        var registers = self.gpio_registers orelse return Error.Uninitialized;
+        try checkPinNumber(pin_number, BoardInfo);
 
-    return Error.IllegalMode;
-}
+        // a series of @bitSizeOf(Mode) is necessary to encapsulate the function of one pin
+        // this is why we have to calculate the amount of pins that fit into a register by dividing
+        // the number of bits in the register by the number of bits for the function
+        // as of now 3 bits for the function and 32 bits for the register make 10 pins per register
+        const pins_per_register = comptime @divTrunc(@bitSizeOf(GpioRegister), @bitSizeOf(Mode));
 
-pub fn setPull(pin_number: u8, mode: PullMode) Error!void {
-    var registers = g_gpio_registers orelse return Error.Uninitialized;
+        const gpfsel_register_zero = comptime gpioRegisterZeroIndex("gpfsel_registers", BoardInfo);
+        const n: @TypeOf(pin_number) = @divTrunc(pin_number, pins_per_register);
 
-    // see the GPPUCLK register description for how to set the pull up or pull down on a per pin basis
-    const gppud_register_zero = comptime gpioRegisterZeroIndex("gppud_register", BoardInfo);
-    const gppudclk_register_zero = comptime gpioRegisterZeroIndex("gppudclk_registers", BoardInfo);
-    const ten_us_in_ns = 10 * 1000;
-    registers[gppud_register_zero] = @intFromEnum(mode);
-    // TODO this may be janky, because no precision of timing is guaranteed
-    // however, the manual only states that we have to wait 150 clock cycles
-    // and we are being very generous here
-    std.os.nanosleep(0, ten_us_in_ns);
+        // set the bits of the corresponding pins to zero so that we can bitwise or the correct mask to it below
+        registers[gpfsel_register_zero + n] &= clearMask(pin_number); // use bitwise-& here
+        registers[gpfsel_register_zero + n] |= modeMask(pin_number, mode); // use bitwise-| here TODO, this is dumb, rework the mode setting mask to not have the inverse!
+    }
 
-    try setPinSingleBit(registers, .{ .pin_number = pin_number, .register_zero = gppudclk_register_zero }, 1);
+    // read the mode of the given pin number
+    pub fn getMode(self: Self, pin_number: u8) !Mode {
+        var registers = self.gpio_registers orelse return Error.Uninitialized;
+        try checkPinNumber(pin_number, BoardInfo);
 
-    std.os.nanosleep(0, ten_us_in_ns);
-    registers[gppud_register_zero] = @intFromEnum(PullMode.Off);
-    try setPinSingleBit(registers, .{ .pin_number = pin_number, .register_zero = gppudclk_register_zero }, 0);
-}
+        const pins_per_register = comptime @divTrunc(@bitSizeOf(GpioRegister), @bitSizeOf(Mode));
+        const gpfsel_register_zero = comptime gpioRegisterZeroIndex("gpfsel_registers", BoardInfo);
+        const n: @TypeOf(pin_number) = @divTrunc(pin_number, pins_per_register);
+
+        const ModeIntType = (@typeInfo(Mode).Enum.tag_type);
+
+        const ones: GpioRegister = std.math.maxInt(ModeIntType);
+        const shift_count = @bitSizeOf(Mode) * @as(u5, @intCast(pin_number % pins_per_register));
+        const stencil_mask = ones << shift_count;
+        const mode_value = @as(ModeIntType, @intCast((registers[gpfsel_register_zero + n] & stencil_mask) >> shift_count));
+
+        inline for (std.meta.fields(Mode)) |mode| {
+            if (mode.value == mode_value) {
+                return @as(Mode, @enumFromInt(mode.value));
+            }
+        }
+
+        return Error.IllegalMode;
+    }
+
+    pub fn setPull(self: Self, pin_number: u8, mode: PullMode) Error!void {
+        var registers = self.gpio_registers orelse return Error.Uninitialized;
+
+        // see the GPPUCLK register description for how to set the pull up or pull down on a per pin basis
+        const gppud_register_zero = comptime gpioRegisterZeroIndex("gppud_register", BoardInfo);
+        const gppudclk_register_zero = comptime gpioRegisterZeroIndex("gppudclk_registers", BoardInfo);
+        const ten_us_in_ns = 10 * 1000;
+        registers[gppud_register_zero] = @intFromEnum(mode);
+        // TODO this may be janky, because no precision of timing is guaranteed
+        // however, the manual only states that we have to wait 150 clock cycles
+        // and we are being very generous here
+        std.os.nanosleep(0, ten_us_in_ns);
+
+        try setPinSingleBit(registers, .{ .pin_number = pin_number, .register_zero = gppudclk_register_zero }, 1);
+
+        std.os.nanosleep(0, ten_us_in_ns);
+        registers[gppud_register_zero] = @intFromEnum(PullMode.Off);
+        try setPinSingleBit(registers, .{ .pin_number = pin_number, .register_zero = gppudclk_register_zero }, 0);
+    }
+};
 
 const PinAndRegister = struct {
     pin_number: u8,
@@ -272,15 +284,15 @@ inline fn modeMask(pin_number: u8, mode: Mode) GpioRegister {
     return @as(GpioRegister, @intCast(@intFromEnum(mode))) << @as(u5, @intCast((pin_bit_idx * @bitSizeOf(Mode))));
 }
 
-fn gpioRegisterZeroIndex(comptime register_name: []const u8, board_info: anytype) comptime_int {
+fn gpioRegisterZeroIndex(comptime register_name: []const u8, comptime board_info: anytype) comptime_int {
     return comptime std.math.divExact(comptime_int, @field(board_info, register_name).start - board_info.gpio_registers.start, @sizeOf(GpioRegister)) catch @compileError("Offset not evenly divisible by register width");
 }
 
 /// just a helper function that returns an error iff the given pin number is illegal
 /// the board info type must carry a NUM_GPIO_PINS member field indicating the number of gpio pins
-inline fn checkPinNumber(pin_number: u8, comptime BoardInfos: type) !void {
+inline fn checkPinNumber(pin_number: u8, comptime board_info: type) !void {
     if (@hasDecl(BoardInfo, "NUM_GPIO_PINS")) {
-        if (pin_number < BoardInfos.NUM_GPIO_PINS) {
+        if (pin_number < board_info.NUM_GPIO_PINS) {
             return;
         } else {
             return Error.IllegalPinNumber;

@@ -20,13 +20,26 @@ pub fn main() !void {
     const client = arugula.Client.init(allocator);
     defer client.deinit();
 
-    try client.connect("tcp://192.168.88.13:8055"); //"tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055");
+    try client.connect("tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055");
 
-    //gpio.setMode(btn_pin, gpio.Mode.Input);
-    //gpio.setPull(btn_pin, gpio.PullMode.PullUp);
+    var gpio_mem = try gpio.Bcm2385GpioMemoryMapper.init();
+    defer gpio_mem.deinit();
+
+    var mapper = gpio_mem.mapper();
+    var op = try gpio.GpioRegisterOperation.init(&mapper);
+    defer op.deinit();
+
+    // setup botton pin
+    try op.setMode(btn_pin, gpio.Mode.Input);
+    try op.setPull(btn_pin, gpio.PullMode.PullUp);
+    // setup led pin
+    try op.setMode(led_pin, gpio.Mode.Output);
 
     var player = asound.Player.init();
     defer player.deinit();
+
+    try player.open();
+    defer player.close();
 
     var capturer = asound.Capturer.init(allocator);
     defer capturer.deinit();
@@ -35,28 +48,25 @@ pub fn main() !void {
     defer capturer.close();
 
     while (true) {
-        captureToPlay(allocator, client, &capturer, &player) catch |err| {
+        captureToPlay(allocator, client, &capturer, &player, &op) catch |err| {
             log.err("capture to play error: {any}", .{err});
         };
     }
 }
 
-fn captureToPlay(allocator: mem.Allocator, client: arugula.Client, capturer: *asound.Capturer, player: *asound.Player) !void {
-    const stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
-
-    try stdout.print("enter to start recording", .{});
-    var c = try stdin.readByte();
-    if (c != '\n') {
+fn captureToPlay(allocator: mem.Allocator, client: arugula.Client, capturer: *asound.Capturer, player: *asound.Player, op: *gpio.GpioRegisterOperation) !void {
+    var current_level = try op.getLevel(btn_pin);
+    if (current_level == gpio.Level.High) { // not pressing
         return;
     }
 
     try capturer.spawnCapture();
+    try op.setLevel(led_pin, gpio.Level.High);
+    log.info("voice capturing", .{});
 
-    try stdout.print("enter to stop recording", .{});
     while (true) {
-        c = try stdin.readByte();
-        if (c != '\n') {
+        current_level = try op.getLevel(btn_pin);
+        if (current_level == gpio.Level.Low) { // is pressing, continue to recording
             continue;
         }
 
@@ -80,6 +90,7 @@ fn captureToPlay(allocator: mem.Allocator, client: arugula.Client, capturer: *as
         try player.spawnPlay(datas);
         player.join();
 
+        try op.setLevel(led_pin, gpio.Level.Low);
         log.info("data played", .{});
         return;
     }

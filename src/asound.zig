@@ -197,11 +197,6 @@ pub const Player = struct {
             log.err("Playback open error: {s}\n", .{c.snd_strerror(err)});
             return ASoundError.PCMOpenFailed;
         }
-        err = c.snd_pcm_set_params(self.handle, c.SND_PCM_FORMAT_S16_LE, c.SND_PCM_ACCESS_RW_INTERLEAVED, 1, 44100, 1, 500000);
-        if (err < 0) {
-            log.err("Playback set params error: {s}\n", .{c.snd_strerror(err)});
-            return ASoundError.PCMHWParamsError;
-        }
     }
 
     pub fn spawnPlay(self: *Self, data: [][]const u8) !void {
@@ -209,17 +204,20 @@ pub const Player = struct {
     }
 
     pub fn playWave(self: *Self, data: [][]const u8) !void {
-        try self.open();
-        defer self.close();
-
         for (data) |d| {
             var fbs = io.fixedBufferStream(d);
             _ = try wav.Loader(@TypeOf(fbs).Reader, true).preload(fbs.reader());
 
+            var err = c.snd_pcm_set_params(self.handle, c.SND_PCM_FORMAT_S16_LE, c.SND_PCM_ACCESS_RW_INTERLEAVED, 1, 44100, 1, 500000);
+            if (err < 0) {
+                log.err("Playback set params error: {s}\n", .{c.snd_strerror(err)});
+                return ASoundError.PCMHWParamsError;
+            }
+
             var fs: c.snd_pcm_uframes_t = (d.len - fbs.pos) / 2;
             var frames = c.snd_pcm_writei(self.handle, d.ptr + fbs.pos, fs);
             if (frames < 0) {
-                var err = @as(c_int, @intCast(frames));
+                err = @as(c_int, @intCast(frames));
                 err = c.snd_pcm_recover(self.handle, err, 0);
                 if (err < 0) {
                     log.err("snd_pcm_writei failed: {s}\n", .{c.snd_strerror(err)});
