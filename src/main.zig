@@ -13,6 +13,8 @@ const Thread = std.Thread;
 const led_pin = 16;
 const btn_pin = 17;
 
+const eden_sever = "tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055";
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -20,7 +22,8 @@ pub fn main() !void {
     const client = arugula.Client.init(allocator);
     defer client.deinit();
 
-    try client.connect("tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055");
+    try client.connect(eden_sever);
+    log.info("eden server connected {s}", .{eden_sever});
 
     var gpio_mem = try gpio.Bcm2385GpioMemoryMapper.init();
     defer gpio_mem.deinit();
@@ -47,6 +50,7 @@ pub fn main() !void {
     try capturer.open();
     defer capturer.close();
 
+    log.info("press button to speaking", .{});
     while (true) {
         captureToPlay(allocator, client, &capturer, &player, &op) catch |err| {
             log.err("capture to play error: {any}", .{err});
