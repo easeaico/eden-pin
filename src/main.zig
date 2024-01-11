@@ -10,7 +10,7 @@ const log = std.log;
 const mem = std.mem;
 const Thread = std.Thread;
 
-const led_pin = 25;
+const led_pin = 36;
 const btn_pin = 17;
 
 const eden_sever = "tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055";
