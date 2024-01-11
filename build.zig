@@ -70,6 +70,7 @@ pub fn build(b: *std.Build) !void {
         }
     }
     zmq.addCSourceFiles(sources.items, &.{});
+    zmq.linkLibC();
     zmq.linkLibCpp();
     zmq.linkLibrary(sha1);
     zmq.linkLibrary(unity);
