@@ -10,7 +10,7 @@ const log = std.log;
 const mem = std.mem;
 const Thread = std.Thread;
 
-const led_pin = 36;
+const led_pin = 16;
 const btn_pin = 17;
 
 const eden_sever = "tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055";
@@ -74,7 +74,7 @@ fn captureToPlay(allocator: mem.Allocator, client: arugula.Client, capturer: *as
             continue;
         }
 
-        var captured = capturer.stopCapture();
+        const captured = capturer.stopCapture();
         log.info("data captured: {d}", .{captured.len});
 
         const cmd = try arugula.ChatCommand.init(allocator, 1, 1, captured);
@@ -86,7 +86,7 @@ fn captureToPlay(allocator: mem.Allocator, client: arugula.Client, capturer: *as
         var resp = try client.recv();
         defer resp.deinit();
 
-        var results = resp.data.items;
+        const results = resp.data.items;
         var datas = try allocator.alloc([]const u8, results.len);
         for (results, 0..) |r, i| {
             datas[i] = r.audio;

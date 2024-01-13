@@ -20,11 +20,10 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    sha1.force_pic = true;
     sha1.addIncludePath(.{ .path = "deps/libzmq/external/sha1" });
-    sha1.addCSourceFiles(&.{
+    sha1.addCSourceFiles(.{ .files = &[_][]const u8{
         "deps/libzmq/external/sha1/sha1.c",
-    }, &.{});
+    } });
     sha1.linkLibC();
 
     const unity = b.addStaticLibrary(.{
@@ -32,11 +31,10 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    unity.force_pic = true;
     unity.addIncludePath(.{ .path = "deps/libzmq/external/unity" });
-    unity.addCSourceFiles(&.{
+    unity.addCSourceFiles(.{ .files = &[_][]const u8{
         "deps/libzmq/external/unity/unity.c",
-    }, &.{});
+    } });
     unity.linkLibC();
 
     const zmq = b.addStaticLibrary(.{
@@ -44,14 +42,13 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    zmq.force_pic = true;
     zmq.addIncludePath(.{ .path = "deps/libzmq/include" });
     zmq.addIncludePath(.{ .path = "deps/libzmq/src" });
 
     var sources = std.ArrayList([]const u8).init(b.allocator);
     {
         const prefix = "./deps/libzmq/src";
-        var dir = try std.fs.cwd().openIterableDir(prefix, .{ .access_sub_paths = true });
+        var dir = try std.fs.cwd().openDir(prefix, .{ .iterate = true });
         var walker = try dir.walk(b.allocator);
         defer walker.deinit();
 
@@ -69,7 +66,9 @@ pub fn build(b: *std.Build) !void {
             }
         }
     }
-    zmq.addCSourceFiles(sources.items, &.{});
+    zmq.addCSourceFiles(.{
+        .files = sources.items,
+    });
     zmq.linkLibCpp();
     zmq.linkLibrary(sha1);
     zmq.linkLibrary(unity);

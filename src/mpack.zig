@@ -25,9 +25,9 @@ pub fn MsgPackWriter(comptime WriterType: anytype) type {
         }
 
         fn writeBytesEndianCorrected(self: *Self, bytes: []const u8) !void {
-            switch (builtin.cpu.arch.endian()) {
-                .Big => try self.writer.writeAll(bytes),
-                .Little => {
+            switch (builtin.target.cpu.arch.endian()) {
+                .big => try self.writer.writeAll(bytes),
+                .little => {
                     var i: isize = @as(isize, @intCast(bytes.len)) - 1;
                     while (i >= 0) : (i -= 1) {
                         _ = try self.writer.write(&.{bytes[@as(usize, @intCast(i))]});
@@ -551,8 +551,8 @@ pub fn MsgPackReader(comptime ReaderType: anytype) type {
                 return error.Eof;
             }
             var result: T = undefined;
-            std.mem.copy(u8, std.mem.asBytes(&result), data[0..@sizeOf(T)]);
-            if (builtin.cpu.arch.endian() == .Little) {
+            std.mem.copyForwards(u8, std.mem.asBytes(&result), data[0..@sizeOf(T)]);
+            if (builtin.cpu.arch.endian() == .little) {
                 std.mem.reverse(u8, std.mem.asBytes(&result));
             }
             return result;
@@ -564,7 +564,7 @@ pub fn MsgPackReader(comptime ReaderType: anytype) type {
             if (bytesRead != @sizeOf(T)) {
                 return error.Eof;
             }
-            if (builtin.cpu.arch.endian() == .Little) {
+            if (builtin.cpu.arch.endian() == .little) {
                 std.mem.reverse(u8, std.mem.asBytes(&result));
             }
             return result;
@@ -612,7 +612,7 @@ pub fn MsgPackReader(comptime ReaderType: anytype) type {
                 @compileError("readInt expects an int type as parameter, got " ++ @typeName(T));
             }
 
-            var result: T = 0;
+            const result: T = 0;
             _ = result;
             const tag = try self.reader.readByte();
 
@@ -631,7 +631,7 @@ pub fn MsgPackReader(comptime ReaderType: anytype) type {
                             std.debug.print("pos fixint: {}\n", .{value});
                         } else if (tag & 0b1110_0000 == 0b1110_0000) {
                             // negative fixint
-                            var value = @as(i8, @bitCast(tag & 0b1111_1111));
+                            const value = @as(i8, @bitCast(tag & 0b1111_1111));
                             std.debug.print("neg fixint: {}\n", .{value});
                         }
                     },
@@ -825,7 +825,7 @@ pub fn MsgPackReader(comptime ReaderType: anytype) type {
                         return Value{ .Int = @as(i64, @intCast(value)) };
                     } else if (tag & 0b1110_0000 == 0b1110_0000) {
                         // negative fixint
-                        var value = @as(i8, @bitCast(tag & 0b1111_1111));
+                        const value = @as(i8, @bitCast(tag & 0b1111_1111));
                         return Value{ .Int = @as(i64, @intCast(value)) };
                     } else if (tag & 0b1110_0000 == 0b1010_0000) {
                         // fixstr
@@ -1088,7 +1088,7 @@ pub fn MsgPackReader(comptime ReaderType: anytype) type {
                         return std.json.Value{ .Integer = @as(i64, @intCast(value)) };
                     } else if (tag & 0b1110_0000 == 0b1110_0000) {
                         // negative fixint
-                        var value = @as(i8, @bitCast(tag & 0b1111_1111));
+                        const value = @as(i8, @bitCast(tag & 0b1111_1111));
                         return std.json.Value{ .Integer = @as(i64, @intCast(value)) };
                     } else if (tag & 0b1110_0000 == 0b1010_0000) {
                         // fixstr

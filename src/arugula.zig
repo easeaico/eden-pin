@@ -73,13 +73,13 @@ pub const ChatResponse = struct {
         log.info("buf size {d}", .{sbuf.len});
 
         var arena = std.heap.ArenaAllocator.init(alloc);
-        var allocator = arena.allocator();
+        const allocator = arena.allocator();
 
         var fbs = io.fixedBufferStream(sbuf);
         var r = mpack.msgPackReader(fbs.reader());
-        var v = try r.readValue(allocator);
-        var a = v.root.Array;
-        var t = a.items[0].String;
+        const v = try r.readValue(allocator);
+        const a = v.root.Array;
+        const t = a.items[0].String;
         if (mem.eql(u8, t, "ERR")) {
             log.err("response error: {s}", .{a.items[1].String});
             return ArugulaError.ResponseError;
@@ -88,8 +88,8 @@ pub const ChatResponse = struct {
         var data = std.ArrayList(InterResp).init(allocator);
         for (a.items[1].Array.items) |i| {
             var m = i.Map;
-            var text: mpack.Value = m.get("text") orelse return ArugulaError.UnpackError;
-            var audio: mpack.Value = m.get("audio") orelse return ArugulaError.UnpackError;
+            const text: mpack.Value = m.get("text") orelse return ArugulaError.UnpackError;
+            const audio: mpack.Value = m.get("audio") orelse return ArugulaError.UnpackError;
 
             try data.append(.{
                 .text = text.String,
@@ -146,7 +146,7 @@ pub const Client = struct {
     }
 
     pub fn send(self: Self, command: *const ChatCommand) !void {
-        var ret = c.zmq_send(self.requester, command.buf.items.ptr, command.buf.items.len, 0);
+        const ret = c.zmq_send(self.requester, command.buf.items.ptr, command.buf.items.len, 0);
         if (ret < 0) {
             log.err("frame send error: {s}", .{c.zmq_strerror(c.zmq_errno())});
             return ArugulaError.SendFrameError;
@@ -171,10 +171,10 @@ pub const Client = struct {
             return ArugulaError.RecvFrameError;
         }
 
-        var ptr = c.zmq_msg_data(&msg);
+        const ptr = c.zmq_msg_data(&msg);
         if (ptr) |p| {
             var data_ptr = @as([*]u8, @ptrCast(p));
-            var size = c.zmq_msg_size(&msg);
+            const size = c.zmq_msg_size(&msg);
             return try ChatResponse.init(self.allocator, data_ptr[0..size]);
         }
 

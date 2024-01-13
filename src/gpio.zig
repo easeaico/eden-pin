@@ -187,7 +187,7 @@ pub const GpioRegisterOperation = struct {
 
     // read the mode of the given pin number
     pub fn getMode(self: Self, pin_number: u8) !Mode {
-        var registers = self.gpio_registers orelse return Error.Uninitialized;
+        const registers = self.gpio_registers orelse return Error.Uninitialized;
         try checkPinNumber(pin_number, BoardInfo);
 
         const pins_per_register = comptime @divTrunc(@bitSizeOf(GpioRegister), @bitSizeOf(Mode));
@@ -239,7 +239,7 @@ const PinAndRegister = struct {
 /// helper function for simplifying working with those contiguous registers where one GPIO bin is represented by one bit
 /// needs the zero register for the set and the pin number and returns the bit (or an error)
 inline fn getPinSingleBit(gpio_registers: ?GpioRegisterMemory, pin_and_register: PinAndRegister) !u1 {
-    var registers = gpio_registers orelse return Error.Uninitialized;
+    const registers = gpio_registers orelse return Error.Uninitialized;
     const pin_number = pin_and_register.pin_number;
     const register_zero = pin_and_register.register_zero;
     try checkPinNumber(pin_number, BoardInfo);

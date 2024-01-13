@@ -64,7 +64,7 @@ pub const Capturer = struct {
     }
 
     pub fn close(self: *Self) void {
-        var err = c.snd_pcm_close(self.handle);
+        const err = c.snd_pcm_close(self.handle);
         if (err < 0) {
             log.err("snd pcm close failed ({s})\n", .{c.snd_strerror(err)});
         }
@@ -114,21 +114,21 @@ pub const Capturer = struct {
     fn captureFrames(self: *Self) !std.ArrayList([]u8) {
         @atomicStore(bool, &self.capturing, true, .SeqCst);
 
-        var err = c.snd_pcm_prepare(self.handle);
+        const err = c.snd_pcm_prepare(self.handle);
         if (err < 0) {
             log.err("cannot prepare audio interface for use ({s})\n", .{c.snd_strerror(err)});
             return ASoundError.PCMPrepareError;
         }
 
         const frame_width = @as(usize, @intCast(c.snd_pcm_format_width(c.SND_PCM_FORMAT_S16_LE)));
-        var frame_size = frame_pre_read * frame_width / 8;
+        const frame_size = frame_pre_read * frame_width / 8;
 
         var frame_buffers = std.ArrayList([]u8).init(self.arena.allocator());
         while (@atomicLoad(bool, &self.capturing, .SeqCst)) {
-            var frame_buffer = try self.arena.allocator().alloc(u8, frame_size);
+            const frame_buffer = try self.arena.allocator().alloc(u8, frame_size);
 
-            var buffer_frames: c.snd_pcm_uframes_t = frame_pre_read;
-            var frame_reads = c.snd_pcm_readi(self.handle, frame_buffer.ptr, buffer_frames);
+            const buffer_frames: c.snd_pcm_uframes_t = frame_pre_read;
+            const frame_reads = c.snd_pcm_readi(self.handle, frame_buffer.ptr, buffer_frames);
             if (frame_reads < 0) {
                 log.err("read from audio interface failed ({s})\n", .{c.snd_strerror(@as(c_int, @intCast(frame_reads)))});
                 return ASoundError.PCMReadError;
@@ -147,7 +147,7 @@ pub const Capturer = struct {
     }
 
     pub fn captureWave(self: *Self) !void {
-        var frame_buffers = try self.captureFrames();
+        const frame_buffers = try self.captureFrames();
 
         var data = std.ArrayList(u8).init(self.arena.allocator());
         for (frame_buffers.items) |b| {
@@ -192,7 +192,7 @@ pub const Player = struct {
     pub fn deinit(_: Self) void {}
 
     pub fn open(self: *Self) !void {
-        var err = c.snd_pcm_open(&self.handle, DefaultDevice, c.SND_PCM_STREAM_PLAYBACK, 0);
+        const err = c.snd_pcm_open(&self.handle, DefaultDevice, c.SND_PCM_STREAM_PLAYBACK, 0);
         if (err < 0) {
             log.err("Playback open error: {s}\n", .{c.snd_strerror(err)});
             return ASoundError.PCMOpenFailed;
@@ -214,8 +214,8 @@ pub const Player = struct {
                 return ASoundError.PCMHWParamsError;
             }
 
-            var fs: c.snd_pcm_uframes_t = (d.len - fbs.pos) / 2;
-            var frames = c.snd_pcm_writei(self.handle, d.ptr + fbs.pos, fs);
+            const fs: c.snd_pcm_uframes_t = (d.len - fbs.pos) / 2;
+            const frames = c.snd_pcm_writei(self.handle, d.ptr + fbs.pos, fs);
             if (frames < 0) {
                 err = @as(c_int, @intCast(frames));
                 err = c.snd_pcm_recover(self.handle, err, 0);
@@ -230,7 +230,7 @@ pub const Player = struct {
                 return ASoundError.PCMWriteError;
             }
 
-            var ret = c.snd_pcm_drain(self.handle);
+            const ret = c.snd_pcm_drain(self.handle);
             if (ret < 0) {
                 log.err("snd_pcm_drain failed: {s}\n", .{c.snd_strerror(ret)});
                 return ASoundError.PCMCloseError;
@@ -243,7 +243,7 @@ pub const Player = struct {
     }
 
     pub fn close(self: Self) void {
-        var ret = c.snd_pcm_close(self.handle);
+        const ret = c.snd_pcm_close(self.handle);
         if (ret < 0) {
             log.err("snd_pcm_close failed: {s}\n", .{c.snd_strerror(ret)});
         }
@@ -256,7 +256,7 @@ test "sound capture" {
     var capturer = try Capturer.init(allocator);
     defer capturer.deinit();
 
-    var data = try capturer.captureWave();
+    const data = try capturer.captureWave();
     try std.testing.expect(data.len > 0);
 
     const file = try std.fs.cwd().createFile("out.wav", .{});
@@ -267,7 +267,7 @@ test "sound capture" {
 
 test "sound play" {
     const file = try std.fs.cwd().openFile("out.wav", .{});
-    var data: []u8 = undefined;
+    const data: []u8 = undefined;
     _ = try file.readAll(data);
 
     var player = Player.init();
