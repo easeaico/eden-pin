@@ -1,0 +1,14 @@
+[Unit]
+Description=Start eden pin
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/home/eden/eden-pin
+Restart=always
+RestartSec=10s
+KillMode=process
+TimeoutSec=infinity
+
+[Install]
+Wants=network-online.target

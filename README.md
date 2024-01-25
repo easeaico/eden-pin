@@ -1,1 +1,1 @@
-# eden-client-pi
+# eden-pin raspberry pi version
