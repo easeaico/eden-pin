@@ -86,6 +86,11 @@ pub const ChatResponse = struct {
         }
 
         var data = std.ArrayList(InterResp).init(allocator);
+        if (a.items.len < 1) {
+            log.err("response data is empty", .{});
+            return ArugulaError.ResponseError;
+        }
+
         for (a.items[1].Array.items) |i| {
             var m = i.Map;
             const text: mpack.Value = m.get("text") orelse return ArugulaError.UnpackError;

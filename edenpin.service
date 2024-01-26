@@ -11,4 +11,4 @@ KillMode=process
 TimeoutSec=infinity
 
 [Install]
-Wants=network-online.target
+WantedBy=multi-user.target

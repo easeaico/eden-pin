@@ -62,19 +62,19 @@ pub fn Loader(comptime Reader: type, comptime verbose: bool) type {
             if (!std.mem.eql(u8, &subchunk1_id, "fmt ")) {
                 return preloadError("missing \"fmt \" header");
             }
-            const subchunk1_size = try reader.readInt(u32, .little);
+            const subchunk1_size = try reader.readInt(u32, .Little);
             if (subchunk1_size != 16) {
                 return preloadError("not PCM (subchunk1_size != 16)");
             }
-            const audio_format = try reader.readInt(u16, .little);
+            const audio_format = try reader.readInt(u16, .Little);
             if (audio_format != 1) {
                 return preloadError("not integer PCM (audio_format != 1)");
             }
-            const num_channels = try reader.readInt(u16, .little);
-            const sample_rate = try reader.readInt(u32, .little);
-            const byte_rate = try reader.readInt(u32, .little);
-            const block_align = try reader.readInt(u16, .little);
-            const bits_per_sample = try reader.readInt(u16, .little);
+            const num_channels = try reader.readInt(u16, .Little);
+            const sample_rate = try reader.readInt(u32, .Little);
+            const byte_rate = try reader.readInt(u32, .Little);
+            const block_align = try reader.readInt(u16, .Little);
+            const bits_per_sample = try reader.readInt(u16, .Little);
 
             if (num_channels < 1 or num_channels > 16) {
                 return preloadError("invalid number of channels");
@@ -102,7 +102,7 @@ pub fn Loader(comptime Reader: type, comptime verbose: bool) type {
             if (!std.mem.eql(u8, &subchunk2_id, "data")) {
                 return preloadError("missing \"data\" header");
             }
-            const subchunk2_size = try reader.readInt(u32, .little);
+            const subchunk2_size = try reader.readInt(u32, .Little);
             if ((subchunk2_size % (num_channels * bytes_per_sample)) != 0) {
                 return preloadError("invalid subchunk2_size");
             }
@@ -150,27 +150,27 @@ pub fn Saver(comptime Writer: type) type {
 
             try writer.writeAll("RIFF");
             if (maybe_data != null) {
-                try writer.writeInt(u32, data_chunk_pos + 8 + data_len - 8, .little);
+                try writer.writeInt(u32, data_chunk_pos + 8 + data_len - 8, .Little);
             } else {
-                try writer.writeInt(u32, 0, .little);
+                try writer.writeInt(u32, 0, .Little);
             }
             try writer.writeAll("WAVE");
 
             try writer.writeAll("fmt ");
-            try writer.writeInt(u32, 16, .little); // PCM
-            try writer.writeInt(u16, 1, .little); // uncompressed
-            try writer.writeInt(u16, num_channels, .little);
-            try writer.writeInt(u32, sample_rate, .little);
-            try writer.writeInt(u32, byte_rate, .little);
-            try writer.writeInt(u16, block_align, .little);
-            try writer.writeInt(u16, bits_per_sample, .little);
+            try writer.writeInt(u32, 16, .Little); // PCM
+            try writer.writeInt(u16, 1, .Little); // uncompressed
+            try writer.writeInt(u16, num_channels, .Little);
+            try writer.writeInt(u32, sample_rate, .Little);
+            try writer.writeInt(u32, byte_rate, .Little);
+            try writer.writeInt(u16, block_align, .Little);
+            try writer.writeInt(u16, bits_per_sample, .Little);
 
             try writer.writeAll("data");
             if (maybe_data) |data| {
-                try writer.writeInt(u32, data_len, .little);
+                try writer.writeInt(u32, data_len, .Little);
                 try writer.writeAll(data);
             } else {
-                try writer.writeInt(u32, 0, .little);
+                try writer.writeInt(u32, 0, .Little);
             }
         }
 
@@ -187,9 +187,9 @@ pub fn Saver(comptime Writer: type) type {
             const data_len_u32 = std.math.cast(u32, data_len) orelse 0;
 
             try seeker.seekTo(4);
-            try writer.writeInt(u32, data_chunk_pos + 8 + data_len_u32 - 8, .little);
+            try writer.writeInt(u32, data_chunk_pos + 8 + data_len_u32 - 8, .Little);
             try seeker.seekTo(data_chunk_pos + 4);
-            try writer.writeInt(u32, data_len_u32, .little);
+            try writer.writeInt(u32, data_len_u32, .Little);
         }
 
         // save a prepared wav (header and data) in one shot.
@@ -254,8 +254,8 @@ test "basic coverage (streaming out)" {
         .format = .signed16_lsb,
     });
     try std.testing.expectEqual(@as(u64, 44), try fbs.getPos());
-    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, buffer[4..8], .little));
-    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, buffer[40..44], .little));
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, buffer[4..8], .Little));
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, buffer[40..44], .Little));
 
     const data = &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
 
@@ -263,6 +263,6 @@ test "basic coverage (streaming out)" {
     try std.testing.expectEqual(@as(u64, 52), try fbs.getPos());
 
     try MySaver.patchHeader(fbs.writer(), fbs.seekableStream(), data.len);
-    try std.testing.expectEqual(@as(u32, 44), std.mem.readInt(u32, buffer[4..8], .little));
-    try std.testing.expectEqual(@as(u32, 8), std.mem.readInt(u32, buffer[40..44], .little));
+    try std.testing.expectEqual(@as(u32, 44), std.mem.readInt(u32, buffer[4..8], .Little));
+    try std.testing.expectEqual(@as(u32, 8), std.mem.readInt(u32, buffer[40..44], .Little));
 }

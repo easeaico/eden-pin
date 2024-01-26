@@ -13,7 +13,8 @@ const Thread = std.Thread;
 const led_pin = 16;
 const btn_pin = 17;
 
-const eden_sever = "tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055";
+// const eden_sever = "tcp://ec2-34-239-163-102.compute-1.amazonaws.com:8055";
+const eden_sever = "tcp://0.0.0.0:8055";
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

@@ -26,8 +26,8 @@ pub fn MsgPackWriter(comptime WriterType: anytype) type {
 
         fn writeBytesEndianCorrected(self: *Self, bytes: []const u8) !void {
             switch (builtin.target.cpu.arch.endian()) {
-                .big => try self.writer.writeAll(bytes),
-                .little => {
+                .Big => try self.writer.writeAll(bytes),
+                .Little => {
                     var i: isize = @as(isize, @intCast(bytes.len)) - 1;
                     while (i >= 0) : (i -= 1) {
                         _ = try self.writer.write(&.{bytes[@as(usize, @intCast(i))]});
@@ -552,7 +552,7 @@ pub fn MsgPackReader(comptime ReaderType: anytype) type {
             }
             var result: T = undefined;
             std.mem.copyForwards(u8, std.mem.asBytes(&result), data[0..@sizeOf(T)]);
-            if (builtin.cpu.arch.endian() == .little) {
+            if (builtin.cpu.arch.endian() == .Little) {
                 std.mem.reverse(u8, std.mem.asBytes(&result));
             }
             return result;
@@ -564,7 +564,7 @@ pub fn MsgPackReader(comptime ReaderType: anytype) type {
             if (bytesRead != @sizeOf(T)) {
                 return error.Eof;
             }
-            if (builtin.cpu.arch.endian() == .little) {
+            if (builtin.cpu.arch.endian() == .Little) {
                 std.mem.reverse(u8, std.mem.asBytes(&result));
             }
             return result;
